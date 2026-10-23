@@ -1,0 +1,27 @@
+#!/usr/bin/env python3
+"""Rewrite the device-tests/README.md index from the case files. Run from anywhere: scripts/device-tests
+
+The index shows, per feature, each case's latest result per platform (scripts/spec_config.py) (the newest Results row for that platform)
+or its status when it has never run, plus a summary line per platform. Edit the cases, never the index.
+"""
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from device_tests_lib import INDEX_END, INDEX_START, README, ROOT, current_index, load, render  # noqa: E402
+
+errors: list[str] = []
+cases = load(errors)
+if errors:
+    print("device-tests: fix these first\n")
+    for e in errors:
+        print(f"  ✗ {e}")
+    sys.exit(1)
+
+text = README.read_text()
+block = render(cases)
+old = current_index()
+if old is None:
+    sys.exit(f"{README.relative_to(ROOT)}: add the markers first:\n{INDEX_START}\n{INDEX_END}")
+README.write_text(text.replace(old, block))
+print(f"device-tests: index written ({len(cases)} case(s))")

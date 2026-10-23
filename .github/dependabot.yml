@@ -1,0 +1,13 @@
+# Dependency updates go to main like any other change (the spec repo has no dev, ADR 0002).
+# Monthly, and GitHub Actions grouped into one PR, to save Actions minutes.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: "/"
+    target-branch: main
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 5
+    groups:
+      actions:
+        patterns: ["*"]

@@ -1,0 +1,90 @@
+#!/usr/bin/env python3
+"""Spec conformance per part: PASS / FAIL / BLOCKED counts from features/*/validation.md.
+
+Reads the results tables from git history at the dates you give, so a trend is one command:
+
+  scripts/metrics                          # the first commit and today
+  scripts/metrics 2026-01-01 2026-02-01    # chosen dates
+
+A rule counts only when its cell starts with PASS, FAIL or BLOCKED. Cells that start with
+anything else (for example the "not involved" mark) are not counted. PASS share is PASS divided by
+the three counted statuses.
+
+Notes on reading the numbers:
+  - A FAIL on the first snapshot is a gap the specs found, not a regression.
+  - This measures progress against the spec. It does not show the spec caused the progress.
+"""
+import re
+import subprocess
+import sys
+from collections import Counter
+from datetime import date
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from spec_config import PARTS  # noqa: E402
+
+ROOT = Path(__file__).resolve().parent.parent
+STATUSES = ("PASS", "FAIL", "BLOCKED")
+
+
+def git(*args: str) -> str:
+    return subprocess.run(["git", "-C", str(ROOT), *args], capture_output=True, text=True).stdout
+
+
+def commit_at(day: str) -> str:
+    return git("rev-list", "-1", f"--before={day} 23:59:59", "HEAD").strip()
+
+
+def counts(rev: str) -> dict[str, Counter]:
+    files = [
+        f for f in git("ls-tree", "-r", "--name-only", rev, "features/").splitlines()
+        if f.endswith("/validation.md")
+    ]
+    result = {p: Counter() for p in PARTS}
+    for f in files:
+        cols = None
+        for line in git("show", f"{rev}:{f}").splitlines():
+            if not line.startswith("|"):
+                continue
+            cells = [c.strip() for c in line.strip().strip("|").split("|")]
+            if cells and cells[0] == "Rule":
+                cols = cells
+                continue
+            if cols is None or not re.match(r"^R\d+", cells[0] or ""):
+                continue
+            for part in PARTS:
+                if part not in cols:
+                    continue
+                i = cols.index(part)
+                if i >= len(cells):
+                    continue
+                words = re.sub(r"[^A-Za-z]", " ", cells[i]).split()
+                first = words[0].upper() if words else ""
+                if first in STATUSES:
+                    result[part][first] += 1
+    return result
+
+
+def first_day() -> str:
+    return git("log", "--reverse", "--format=%cs").split("\n", 1)[0].strip() or date.today().isoformat()
+
+
+def main() -> None:
+    days = sys.argv[1:] or [first_day(), date.today().isoformat()]
+    print(f"{'date':12}{'part':10}{'PASS':>6}{'FAIL':>6}{'BLOCKED':>9}{'PASS share':>12}")
+    for day in days:
+        rev = commit_at(day)
+        if not rev:
+            print(f"{day:12}no commit on or before this date")
+            continue
+        for part, c in counts(rev).items():
+            total = sum(c.values())
+            if total == 0:
+                continue
+            share = c["PASS"] / total * 100
+            print(f"{day:12}{part:10}{c['PASS']:>6}{c['FAIL']:>6}{c['BLOCKED']:>9}{share:>11.0f}%")
+
+
+if __name__ == "__main__":
+    main()

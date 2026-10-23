@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "deny": [
+      "Bash(gh pr merge)",
+      "Bash(gh pr merge *)",
+      "Bash(gh pr review *)",
+      "Bash(gh release *)",
+      "Bash(git tag *)",
+      "Bash(git push --tags*)",
+      "Bash(git push * --tags*)",
+      "Bash(git push origin dev*)",
+      "Bash(git push origin main*)",
+      "Bash(git push origin HEAD:dev*)",
+      "Bash(git push origin HEAD:main*)",
+      "Bash(git push * refs/tags/*)",
+      "Bash(gh api *rulesets*)",
+      "Bash(gh api *protection*)",
+      "Bash(gh repo edit *)"
+    ]
+  }
+}

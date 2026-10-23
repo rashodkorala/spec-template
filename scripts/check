@@ -1,0 +1,187 @@
+#!/usr/bin/env python3
+"""Validate the spec repo. Run from anywhere: scripts/check
+
+Fails (exit 1) on:
+  - a spec / contract / bug / assessment / change file without a valid Status line
+  - duplicate rule IDs in a feature spec
+  - a validation.md row citing a rule that isn't in its spec.md
+  - a `verified` spec without commit SHAs
+  - a feature folder with no row in parity.md
+  - an archived change that isn't Status: Done and Synced: yes
+  - two open changes modifying or removing the same rule
+  - em dashes in user-facing copy (copy/ tables and spec "## Copy" tables)
+  - a decided assessment or closed bug without a single valid verdict
+"""
+import re
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+errors: list[str] = []
+
+
+def err(path: Path, msg: str) -> None:
+    errors.append(f"{path.relative_to(ROOT)}: {msg}")
+
+
+def field(text: str, name: str, head_lines: int = 12) -> str | None:
+    for line in text.splitlines()[:head_lines]:
+        m = re.match(rf"^{name}:\s*(.*)$", line)
+        if m:
+            return m.group(1).strip()
+    return None
+
+
+def check_status(path: Path, allowed: set[str]) -> str | None:
+    status = field(path.read_text(), "Status")
+    if status is None:
+        err(path, "missing 'Status:' line near the top")
+        return None
+    value = status.split()[0].rstrip(".").lower() if status else ""
+    if value not in allowed:
+        err(path, f"Status '{status}' must be one of: {', '.join(sorted(allowed))}")
+        return None
+    return value
+
+
+def instances(folder: str, filename: str) -> list[Path]:
+    base = ROOT / folder
+    if not base.is_dir():
+        return []
+    return sorted(p for p in base.glob(f"*/{filename}") if p.parent.name != "_template")
+
+
+def table_rows(lines: list[str]) -> list[str]:
+    return [l for l in lines if l.startswith("|") and not re.match(r"^\|[\s\-:|]+\|$", l)]
+
+
+def check_copy_lines(path: Path, lines: list[str]) -> None:
+    rows = table_rows(lines)[1:]  # skip header row
+    for row in rows:
+        if "—" in row:
+            err(path, f"em dash in user-facing copy: {row.strip()[:80]}")
+
+
+# --- features -------------------------------------------------------------
+parity_text = (ROOT / "parity.md").read_text() if (ROOT / "parity.md").exists() else ""
+parity_slugs = set(re.findall(r"^\|\s*`([a-z0-9-]+)`", parity_text, re.M))
+
+features_dir = ROOT / "features"
+for feature in sorted(p for p in features_dir.iterdir() if p.is_dir() and p.name != "_template"):
+    spec = feature / "spec.md"
+    if feature.name not in parity_slugs:
+        err(feature, "no row in parity.md (first column must be `" + feature.name + "`)")
+    if not spec.exists():
+        err(feature, "missing spec.md")
+        continue
+    text = spec.read_text()
+    status = check_status(spec, {"proposed", "draft", "verified"})
+    if status == "verified":
+        verified = field(text, "Verified against") or ""
+        if not re.search(r"@[0-9a-f]{7,40}", verified):
+            err(spec, "Status is verified but 'Verified against:' has no commit SHAs")
+
+    ids = re.findall(r"^### R(\d+)\.", text, re.M)
+    seen: set[str] = set()
+    for rid in ids:
+        if rid in seen:
+            err(spec, f"duplicate rule ID R{rid}")
+        seen.add(rid)
+
+    # Copy section
+    m = re.search(r"^## Copy\s*$(.*?)(?=^## |\Z)", text, re.M | re.S)
+    if m:
+        check_copy_lines(spec, m.group(1).splitlines())
+
+    for notes in feature.glob("*.md"):
+        if notes.name in ("spec.md", "validation.md"):
+            continue
+        check_status(notes, {"proposed", "draft", "verified"})
+
+    validation = feature / "validation.md"
+    if validation.exists():
+        cited = re.findall(r"^\|\s*R(\d+)\s*\|", validation.read_text(), re.M)
+        for rid in cited:
+            if rid not in seen:
+                err(validation, f"cites R{rid}, which isn't in spec.md")
+
+# --- contracts and top-level docs -----------------------------------------
+for doc in [ROOT / "constitution.md", ROOT / "glossary.md"]:
+    if doc.exists():
+        check_status(doc, {"draft", "verified"})
+for contract in sorted((ROOT / "contracts").glob("*/README.md")):
+    check_status(contract, {"empty", "proposed", "draft", "verified"})
+
+# --- copy -----------------------------------------------------------------
+for copy_file in sorted((ROOT / "copy").glob("*.md")):
+    check_copy_lines(copy_file, copy_file.read_text().splitlines())
+
+# --- changes --------------------------------------------------------------
+CHANGE_STATUS = {"proposed", "agreed", "implementing", "done"}
+touched: dict[tuple[str, str], Path] = {}
+for proposal in instances("changes", "proposal.md"):
+    if proposal.parent.parent.name == "archive":
+        continue
+    check_status(proposal, CHANGE_STATUS)
+    text = proposal.read_text()
+    for section in ("MODIFIED", "REMOVED"):
+        m = re.search(rf"^### {section}\s*$(.*?)(?=^### |^## |\Z)", text, re.M | re.S)
+        if not m:
+            continue
+        for rid, feat in re.findall(r"^#### R(\d+)\..*?\(`features/([a-z0-9-]+)`\)", m.group(1), re.M):
+            key = (feat, rid)
+            if key in touched:
+                err(proposal, f"R{rid} in features/{feat} is also changed by "
+                              f"{touched[key].parent.name}; sequence the two changes")
+            touched[key] = proposal
+
+for proposal in sorted((ROOT / "changes" / "archive").glob("*/proposal.md")):
+    text = proposal.read_text()
+    status = (field(text, "Status") or "").lower()
+    synced = (field(text, "Synced") or "").lower()
+    if status != "done" or synced != "yes":
+        err(proposal, "archived change must have 'Status: Done' and 'Synced: yes'")
+
+# --- bugs -----------------------------------------------------------------
+BUG_VERDICTS = {"confirmed", "not-a-bug", "spec-gap", "duplicate", "cannot-reproduce"}
+for bug in instances("bugs", "bug.md"):
+    status = check_status(bug, {"reported", "assessed", "approved", "fixing", "testing", "closed"})
+    if status and status != "reported":
+        verdict = (field(bug.read_text(), "Verdict") or "").lower()
+        if verdict not in BUG_VERDICTS:
+            err(bug, f"Verdict must be one of: {', '.join(sorted(BUG_VERDICTS))}")
+        severity = field(bug.read_text(), "Severity") or ""
+        if status != "reported" and verdict == "confirmed" and severity not in {"S1", "S2", "S3", "S4"}:
+            err(bug, "confirmed bug needs Severity: S1, S2, S3 or S4")
+
+# --- assessments ----------------------------------------------------------
+for assessment in instances("assessments", "assessment.md"):
+    status = check_status(assessment, {"open", "decided"})
+    if status == "decided":
+        verdict = (field(assessment.read_text(), "Verdict") or "").lower()
+        if verdict not in {"go", "needs-clarification", "kill"}:
+            err(assessment, "decided assessment needs Verdict: go, needs-clarification or kill")
+
+# --- device tests ---------------------------------------------------------
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import device_tests_lib as dtl  # noqa: E402
+
+dt_errors: list[str] = []
+dt_cases = dtl.load(dt_errors)
+errors.extend(dt_errors)
+if dtl.DT_DIR.exists() and not dt_errors:
+    index = dtl.current_index()
+    if index is None:
+        errors.append("device-tests/README.md: missing the index markers")
+    elif index != dtl.render(dt_cases):
+        errors.append("device-tests/README.md: index is stale; run scripts/device-tests")
+
+# --- report ---------------------------------------------------------------
+if errors:
+    print(f"spec check: {len(errors)} problem(s)\n")
+    for e in errors:
+        print(f"  ✗ {e}")
+    sys.exit(1)
+
+n_features = len([p for p in features_dir.iterdir() if p.is_dir() and p.name != "_template"])
+print(f"spec check: OK ({n_features} feature(s))")

@@ -1,0 +1,28 @@
+name: Spec check
+
+# scripts/check on every PR into main and every push to it (AGENTS.md: run it
+# before every commit). Required by the main ruleset (ADR 0002).
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: spec-check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  spec-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          # The script uses `str | None` annotations, so 3.10 or newer.
+          python-version: '3.12'
+      - run: scripts/check

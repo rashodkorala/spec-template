@@ -1,0 +1,41 @@
+name: Branch rules
+
+# ADR 0002, spec exception: this repo has only `main` (no `dev`, no
+# releases). Two cheap checks (Linux, seconds) that the main ruleset requires:
+#   branch-name    the PR's branch is f/<slug>, b/<slug>, h/<slug> or dependabot/...
+#   source-branch  main takes f/, b/, h/ and dependabot/
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, edited, reopened, synchronize]
+
+permissions: {}
+
+jobs:
+  branch-name:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - env:
+          HEAD: ${{ github.head_ref }}
+        run: |
+          if [[ "$HEAD" =~ ^(f|b|h)/[a-z0-9._-]+$ || "$HEAD" =~ ^dependabot/ ]]; then
+            echo "branch '$HEAD' ok"
+          else
+            echo "::error::Branch '$HEAD' must be f/<slug>, b/<slug> or h/<slug> (lowercase a-z 0-9 . _ -). See ADR 0002."
+            exit 1
+          fi
+
+  source-branch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - env:
+          HEAD: ${{ github.head_ref }}
+        run: |
+          if [[ "$HEAD" =~ ^(f|b|h)/ || "$HEAD" =~ ^dependabot/ ]]; then
+            echo "$HEAD -> main ok"
+          else
+            echo "::error::'$HEAD' can't merge into main. the spec repo takes f/, b/, h/ and dependabot/ branches straight into main. See ADR 0002."
+            exit 1
+          fi
