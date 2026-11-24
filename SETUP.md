@@ -10,6 +10,12 @@
    Then match the part columns in `features/_template/validation.md`, `parity.md` and the `Parts affected:` lines in the templates.
 4. Fill `constitution.md` and `glossary.md` (both start as `draft`).
 5. Fill the repo table in `README.md` and `components/README.md`, and the contract list in `contracts/README.md`.
-6. Set `.github/CODEOWNERS` to the owner, and add a branch ruleset on `main` that requires the `branch-name`, `source-branch` and `spec-check` checks.
+6. Set `.github/CODEOWNERS` to the owner.
 7. Run `scripts/check`. It should print `OK (0 feature(s))`.
-8. Delete this file.
+8. Delete this file, then commit and push to `main`.
+9. Last, because `main` takes only PRs from here on, add the ADR 0002 ruleset:
+   ```bash
+   gh api -X POST 'repos/{owner}/{repo}/rulesets' --input .github/rulesets/main.json
+   ```
+   Run this yourself: `.claude/settings.json` denies it to agents.
+   Rulesets on a private repo need a paid GitHub plan.
